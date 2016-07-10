@@ -1,0 +1,73 @@
+// not a program, more a repository of useful code
+
+// how to read an array of pots, & only update reading if changed
+
+  tidePotValue[ch] = analogRead(TIDE_PIN[ch]);
+  if ((tide[ch] < 0) && (abs(tidePotValue[ch] - abs(tide[ch])) < POT_HYSTERESIS)) { // near where it should be
+    tide[ch] = abs(tide[ch]); // turn latch off
+  }
+  
+  
+    // dealing with a switch - giving long press as being over LONG_HOLD_TIME
+    
+  if ((digitalRead(BACK_SW_PIN)) && (!lastBackReading)) {
+    backSwOnTime = millis();
+    lastBackReading = true;
+    // any other code to run at start of button press goes here
+  }
+  if ((!digitalRead(BACK_SW_PIN)) && lastBackReading && (millis() > (backSwOnTime + DEBOUNCE_TIME))) {
+    lastBackReading = false; // let go
+    if (millis() < (backSwOnTime + LONG_HOLD_TIME)) {      // short press
+   // short press code
+    } else { // if (millis() >= (backSwOnTime + LONG_HOLD_TIME)) {       // long press
+   // long press code
+    }
+  }
+  if (!(digitalRead(BACK_SW_PIN))) {
+    lastBackReading = false; // let go
+  }
+  
+  
+  
+  // check for clock signal, internal clock if not, generate trigger every x ms
+
+  
+    // read clock divisor
+  clockDivisor = int(map(analogRead(CLOCK_RATE_PIN), 0, 1023, 0, MAX_CLOCK_DIVISOR));
+
+  // read clock pin - updates clockNumber if new signal
+  clockIn = !(digitalRead(CLOCK_IN_PIN)); // incoming clock inverted ie clock signals are low
+  if (clockIn) {
+    internalClock = false;
+    areClocksIncoming = millis(); // start 'turn off' timer whenever clock signal incoming
+  }
+  if (!internalClock) {
+    if ((clockIn) && (!oldClockIn) && (millis() > (clockInTime + DEBOUNCE_TIME))) { // new clock signal
+      clockNumber ++;
+      oldClockIn = true;
+      clockInTime = millis();
+    } else if (!clockIn) {
+      oldClockIn = false;
+    }
+    // look for new clock signal, and check clock Divisor, issue new trigger if appropriate
+    if (clockNumber >= clockDivisor) {
+      trigger = true;
+      clockNumber = 0;
+    }
+    if (millis() > areClocksIncoming + TURN_INT_CLOCK_ON_TIME) { // no clock signal for ages, revert to internal clock
+      internalClock = true;
+    }
+  } else if (internalClock) {
+    clockPot = analogRead(CLOCK_RATE_PIN);
+    if (abs(clockPot - oldClockPot) > (POT_HYSTERESIS)) {
+      oldClockPot = clockPot;
+      tempo = map(clockPot, 0, 1023, MIN_TEMPO, MAX_TEMPO);
+      clockPeriod = 60000 / tempo;
+      Serial.print("new tempo is: ");
+      Serial.println(tempo);
+    }
+  }
+  if (millis() > (lastTrigger + clockPeriod)) {
+    lastTrigger = millis();
+    trigger = true;
+  }
