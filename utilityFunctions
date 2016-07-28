@@ -28,6 +28,24 @@
   }
   
   
+  // shuffle an array[][i]
+    if (shuffleSw) { // backup then shuffle current pattern
+
+   // saveCurrent(currentChannel);
+    for (int i = 0; i < currentPatternLength[currentChannel]; i ++) { // for each value
+      int r = random(0, currentPatternLength[currentChannel] - 1 - i); // choose a random number
+      int t = currentPattern[currentChannel][r]; // and shuffle the array
+      currentPattern[currentChannel][r] = currentPattern[currentChannel][currentPatternLength[currentChannel] - 1 - i];
+      currentPattern[currentChannel][currentPatternLength[currentChannel] - 1 - i] = t;
+    }
+    shuffleSw = false;
+
+    if (DEBUG) {
+      Serial.println("shuffle switch");
+      printPattern(currentChannel);
+    }
+  }
+  
   
   // check for clock signal, internal clock if not, generate trigger every x ms
 
