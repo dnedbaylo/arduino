@@ -1,0 +1,38 @@
+// triggers a pulse for testing solenoid with different pulse lengths & PWM
+// PWM pin -> 2K2 -> base of TIP120, 7v -> solenoid -> collector, emitter tied to ground, 
+// protection 1N4004 across solenoid, from collector TIP120 -> V+
+
+// playing a glockenspiel:
+// using Adafruit P2776 around 7v gives best results with pulseLength of 7ms, more than that starts to damp
+// PWM of 170-255 give some volume control
+
+int solenoidPin = 10; // PWM pin
+int lengthPotPin = A0; // pots control length & PWM
+int pwmPotPin = A1;
+int pulseLength = 7; // about 7ms is good.
+int pulseWidth;
+int gapBetweenNotes = 1000; // ms
+
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(solenoidPin, OUTPUT);
+  pinMode(lengthPotPin, INPUT);
+  pinMode(pwmPotPin, INPUT);
+}
+
+void loop() {
+  int lengthPot = analogRead(lengthPotPin);
+  int pwmPot = analogRead(pwmPotPin);
+  pulseLength = map(lengthPot, 0, 1023, 2, 50);
+  pulseWidth = map(pwmPot, 0, 1023, 0, 255);
+
+  Serial.print(pulseLength);
+  Serial.print(" <-length, PW -> ");
+  Serial.println(pulseWidth);
+
+  analogWrite(solenoidPin, pulseWidth);
+  delay(pulseLength);
+  analogWrite(solenoidPin, 0);
+  delay(gapBetweenNotes);
+}
