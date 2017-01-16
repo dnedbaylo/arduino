@@ -1,0 +1,105 @@
+/*
+This is an arduino function intended to run on an ATTiny25/45/85. 
+2 pots control freq & decay
+gate in -> optocoupler & triggers signal in MCU
+MCU outputs to TIP120 Darlington to give power to solenoid
+single gate triggers multiple hits of specified duration & frequency, endlessly, or for a specified decayTime. 
+(? add PWM decaying over time)
+
+This triggers single or multiple hits on a cymbal, for instance, from 1 trigger - listen back via a contact mic?
+*/
+
+const byte GATE_IN_PIN = 2; // pin 7
+const byte GATE_OUT_PIN = 0; // pin 5
+const byte DECAY_POT_PIN = 3; // pin 2
+const byte FREQ_POT_PIN = 4; // pin 3
+const int MIN_DECAY_TIME = 10;
+const int MAX_DECAY_TIME = 15000;
+const int ENDLESS_POT_POS = 1000;
+const int HIT_TIME = 10; // time solenoid triggers for on individual hit
+const int RELAXATION_TIME = 6; // time for solenoid to recover
+const int MIN_PERIOD = HIT_TIME + RELAXATION_TIME; // hard to go quicker than this -
+const int MAX_PERIOD = 2000; // 0.5Hz
+const int LONG_HOLD_TIME = 3000;
+const int DEBOUNCE_TIME = 50;
+const boolean PULSE = false; // optocoupler inverts, so a pulse is actually a low
+
+
+long decayTime; // in ms
+long lastStartTime;
+long thisPeriodStartTime;
+int dutyCycle = 255; // 0-255
+int minDutyCycle = 100;
+
+int trigPeriod; // how often new trigger should start
+
+int decayPotValue;
+int freqPotValue;
+
+boolean currentGate = false; // holds status so can see changes
+boolean currentlyPlaying = false;
+boolean endless = false; // if true, never stops
+
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(GATE_IN_PIN, INPUT);
+  pinMode(DECAY_POT_PIN, INPUT);
+  pinMode(FREQ_POT_PIN, INPUT);
+  pinMode(GATE_OUT_PIN, OUTPUT);
+
+}
+
+void loop() {
+  readGate();
+  readPots();
+
+  if ((!endless) && (millis() > (lastStartTime + decayTime))) {
+    currentlyPlaying = false;
+    // ? ease off PWM duty cycle towards end of fade?
+    turnOff();
+  }
+
+  if (currentlyPlaying) {
+    if (millis() > thisPeriodStartTime + HIT_TIME) {
+      turnOff();
+    }
+    if (millis() > thisPeriodStartTime + trigPeriod) {
+      thisPeriodStartTime = millis();
+      playOn();
+    }
+  }
+} // end loop
+
+void playOn() {
+  analogWrite(GATE_OUT_PIN, dutyCycle);
+}
+
+void turnOff() {
+  digitalWrite(GATE_OUT_PIN, LOW);
+}
+
+void readPots() {
+  decayPotValue = analogRead(DECAY_POT_PIN);
+  decayTime = map(decayPotValue, 0, ENDLESS_POT_POS, MAX_DECAY_TIME, 15000);
+  if (decayPotValue > ENDLESS_POT_POS) {
+    endless = true;
+  } else {
+    endless = false;
+  }
+  freqPotValue = analogRead(FREQ_POT_PIN);
+  trigPeriod = map(freqPotValue, 0, 1023, MIN_PERIOD, MAX_PERIOD);
+}
+
+void readGate() {
+  if ((digitalRead(GATE_IN_PIN) == PULSE) && (!currentGate)) { // any code to run at start of button press goes here
+    lastStartTime = millis();
+    thisPeriodStartTime = millis();
+    playOn();
+    currentGate = true;
+    currentlyPlaying = true;
+  }
+  if (digitalRead(GATE_IN_PIN) != PULSE) { // let go
+    currentGate = false;
+  }
+}
