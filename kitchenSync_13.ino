@@ -6,22 +6,26 @@ This extracts the code and will derive a clock signal from the JM when it's runn
 It should also drive the JM by converting incoming clock (pulses, ? MIDI also) into proprietary JM sync signals. 
 This lets you drive a modular sequencer from the JM, and vice versa. 
 
-send MIDI to jamman solo XT via jamsync in
+It wouldn't be hard to convert this to processing, running on a pi, meaning you could send OSC messages to sync in sonicPi etc
+A pi shield would give space for MIDI sockets & circuit protection. 
 
 
 to do
+find original schematic & update. needs MIDI in & out on board. 
+
 lagPot which delays clock2 & midi2 up to 2 beats
 
 
 pins
 4 digital ins: MIDI, clock, reset, JM. 
 5 digital outs MIDI, clock, reset, JM. LED to mark loops
-? SPI outs to digipot: MIDI to CV outs. 
-send to ring of 3.5mm output & 3.3V to ring of 3.5mm
+# send to ring of 3.5mm output & 3.3V to ring of 3.5mm # check in notebook
 2 analog in: switch - 4 way for tempo master. switch for clock divider - eg 1/2/4/8/16/24 via resistor ladder
 also 3 buttons - up, down, record/stop connecting 5v to 
 3 jack socket for switch lead and 2 ins to JM - from back. 
 1 jack socket for input to JM. 3 way switch to send this to L, R or both channels. 
+optional
+? SPI outs to digipot: MIDI to CV outs.
 
 history
 v13 up on github. revisited (been fallow for some time)
