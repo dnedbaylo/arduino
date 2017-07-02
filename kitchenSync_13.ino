@@ -9,10 +9,34 @@ This lets you drive a modular sequencer from the JM, and vice versa.
 It wouldn't be hard to convert this to processing, running on a pi, meaning you could send OSC messages to sync in sonicPi etc
 A pi shield would give space for MIDI sockets & circuit protection. 
 
+main functions
+circuit protection, 4066 to trigger switches
+4066 takes mono input & sends to L or R ins on JM. 
+
+signals on footswtich in via 4066 can set tap tempo or switch up & down bank playing
+
+panel
+jacks -------------
+2 to, from JM
+audio in, mono
+audio out, mono
+clock in
+reset in
+pots --------------
+clock Div in -> A0
+switches ----------
+momentary switch ->A1 // diverts mono input from L to R JM in via 4066
+
+
 
 to do
-find original schematic & update. needs MIDI in & out on board. 
+find original schematic & update. redo board. needs MIDI in & out on board. 
 
+
+should it be single supply?
+
+
+maybe
 lagPot which delays clock2 & midi2 up to 2 beats
 
 
@@ -125,8 +149,8 @@ boolean oldResetIn = 0;
 boolean playFlag = 0;
 boolean stopFlag = 0;
 boolean loopFlag = 0;
-unsigned  long syncTime = 0;
-unsigned  long loopTime = 0;
+unsigned long syncTime = 0;
+unsigned long loopTime = 0;
 unsigned long loopDuration = 0;
 unsigned long divLoopDuration = 0;
 unsigned float lagTime = 0;
@@ -199,6 +223,8 @@ syncMaster = (analogRead(clockDivInPin) / 256);
 if (syncMaster != oldSyncMaster) {  // change tempo only if switch changed
   // load new tempo
   /*
+  
+// option internal clock ie master ? 
 if (syncMaster == 0) { // JM
   newTempo = JMtempo;
 } else if (syncMaster == 1) {
