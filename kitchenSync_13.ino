@@ -1,7 +1,19 @@
 /*
-kitchenSync! v12
+kitchenSync! v13
+This code runs on an arduino nano, to interface a modular synth with a JamMan pedal (the JMsoloXT, but the codes it uses to sync with another JM is the same)
+
+This extracts the code and will derive a clock signal from the JM when it's running, with reset pulses at the end of each loop
+It should also drive the JM by converting incoming clock (pulses, ? MIDI also) into proprietary JM sync signals. 
+This lets you drive a modular sequencer from the JM, and vice versa. 
+
 send MIDI to jamman solo XT via jamsync in
 
+
+to do
+lagPot which delays clock2 & midi2 up to 2 beats
+
+
+pins
 4 digital ins: MIDI, clock, reset, JM. 
 5 digital outs MIDI, clock, reset, JM. LED to mark loops
 ? SPI outs to digipot: MIDI to CV outs. 
@@ -11,7 +23,8 @@ also 3 buttons - up, down, record/stop connecting 5v to
 3 jack socket for switch lead and 2 ins to JM - from back. 
 1 jack socket for input to JM. 3 way switch to send this to L, R or both channels. 
 
-to do - lagPot which delays clock2 & midi2 up to 2 beats
+history
+v13 up on github. revisited (been fallow for some time)
 v12 rewrite to consolidate
 v11 put it all together. sort out clock divisions ? interpolate to get half divisions? space for up to 12 ie 1,2,3,4,5,6,8,9,12,16,24 plus ? 0.5, 0.25
 v10 footswitch done via 4066. 1M pulldown resistor on arduino pins. 
