@@ -1,0 +1,148 @@
+/* 
+ *  v12 still works. phew. 
+ *  v11 yes this works
+ *  v10 - can we declare SPI begin, set clock, dataMode at time of call instead?
+ *  * v9 running on pins 7 & 8. 
+ * v8 yes working now on pin 7!
+ * v7 yes running a MCP4922 but only via pins 4 & 10. 
+ * ? needs pull up as being weird. 
+ * v 6 yes this works! not yet multiple SSs. 
+ * 
+ * for non CS pins, declare as output.
+ * 
+ * 
+  DAC _MCP4922 to DUE
+  This sketch allows you to interface the Arduino DUE with a DAC MCP4922.
+  The DAC needs a 16 bit word to work.
+  The first 4 bits are control bits and the remaining are bits which will contain
+  the value you want to send.
+  We have 12 bit available for our message so we will have a range of values between
+  0 and 4095.
+  Connections
+  ====================================================
+
+  +5V > 4922 pin 1
+  DUE pin CS > 4922 pin 3 (SS - slave select)
+  DUE SCK > 4922 pin 4 (SCK - clock)
+  DUE MOSI > 4922 pin 5 (MOSI - data out)
+  Ground > 4922 pin 8 (LDAC)
+  +3.3V > 4922 pin 11 (voltage ref DAC B)
+  Ground > 4922 pin 12
+  +3.3v > 4922 pin 13 (voltage ref DAC A)
+  4922 pin 14 DAC A > 1k resistor > SignalOUT(you can put this signal in a
+  multimeter or oscilloscope to look at it)
+*/
+#include <SPI.h> // Include the SPI Library
+
+int value = 3000;
+int inc = 20;
+const int chA = 0;
+const int chB = 1;
+
+#define CS 10 // It can be 10,4, or 52 . Be careful if you use an Ethernet Shield
+
+const int LFO1_PIN = 7;
+const int LFO3_PIN = 8;
+
+void setup() {
+//  pinMode(CS, OUTPUT); // this actually STOPS it for pins 4 & 10
+
+  pinMode(LFO1_PIN, OUTPUT); // don't declare pin mode for pins 4 or 10, certainly. 
+  pinMode(LFO3_PIN, OUTPUT); // don't declare pin mode for pins 4 or 10, certainly. 
+
+  /* Our DAC can operate at Mode 0,0 (which corresponds to mode 0 in the SPI
+    library) and in mode 1,1 (which corresponds to mode 3 in the SPI library) */
+  /* I don´t know why instead the DAC is working with the following instruction??
+    Everything works also without this instruction. I don´t know why!
+    it´s working just with modes 2 and 3. Maybe these mode 2 and 3 corresponds
+    to the mode 0,0 and 1,1 to which the MCP4922 datasheet is referring.
+    To understand what I´m talking about give a look to the following page:
+    http://en.wikipedia.org/wiki/Serial_Peripheral_Interface_Bus
+    in the section "Mode Numbers".
+  */
+  Serial.begin(9600);  
+//  SPI.begin(CS);
+  SPI.setBitOrder(MSBFIRST);
+  SPI.setDataMode(SPI_MODE1); // very odd - works NOT on 0, but does work on SPI modes 1,2 & 3. 1 is correct (0,0)
+//  SPI.setClockDivider(LFO1_PIN, 16); // reduced speed - MCP4922 max is 20Mhz
+//  SPI.begin(LFO3_PIN);
+//  SPI.setDataMode(LFO3_PIN, SPI_MODE1); 
+//  SPI.setClockDivider(LFO3_PIN, 16); // reduced speed - MCP4922 max is 20Mhz
+  
+
+}
+
+void loop() {
+
+  // With V_REF of 3.3 V and VDD of 5V , 2470 corresponds to 4.00V
+  // 1230 corresponds to 2.00V
+
+  value += inc;
+  if (value > 4096) {
+    inc = -50;
+  }
+  if (value < 0) {
+    inc = 50;
+  }
+
+  sendLFO(1, value);
+//  sendLFO(3, 4096 - value);
+  
+//sendLFO(1, 3000);
+//  delay(800);
+//  sendLFO(1, 0);
+//  delay(800);  
+
+
+}
+
+void sendLFO(int i, int value) {
+  i --; // sent as LFO1 is 1, so gets to 0 for modulo
+  int SS;
+  if (i < 2) {
+    SS = LFO1_PIN;
+  } else {
+    SS = LFO3_PIN;
+  }
+  byte DAC = byte(i);
+  DAC %= 2; // channel A if even, B if odd
+  sendToDac(SS, DAC, value);  
+}
+
+
+void sendToDac(int SS, int DAC, int val){
+  // The entire message to send a 4095 number will be:
+  // 0111 | 111111111111
+  if (val > 4095) {
+    val = 4095;
+  }
+    Serial.print(SS); Serial.print(" <-SS  DAC-> "); Serial.print(DAC); Serial.print("  :"); Serial.println(val);
+  byte msg1 = (byte)(val >> 8);
+  byte msg2 = (byte)val;
+  if (DAC == 0) {
+    msg1 = msg1 | 0b01010000;
+  } else if (DAC == 1) {
+    msg1 = msg1 | 0b11010000;
+  }
+  SPI.begin(SS);
+//  SPI.setDataMode(SPI_MODE1); // very odd - works NOT on 0, but does work on SPI modes 1,2 & 3. 1 is correct (0,0)
+  SPI.setClockDivider(SS, 16); // reduced speed - MCP4922 max is 20Mhz
+  
+  // byte msg1=0b01010000; // 01111111
+  // byte msg2=0b00000001; // 11111111
+  
+  digitalWrite(SS, LOW);
+  
+  /* The DAC accepts only words of 16bit and here we are sending 2 bytes one after
+    another one. For more info about the SPI.transfer(…,…) function give a look to the
+    following page: http://arduino.cc/en/Reference/SPITransfer */
+  SPI.transfer(SS, msg1);
+  SPI.transfer(SS, msg2);    
+  
+  digitalWrite(SS, HIGH);  
+  SPI.end(SS);
+
+  
+//  SPI.transfer(SS, msg1, SPI_CONTINUE);
+//  SPI.transfer(SS, msg2, SPI_LAST);
+}
