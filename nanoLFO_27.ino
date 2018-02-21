@@ -35,8 +35,8 @@
 const int POT_HYSTERESIS = 10; // keep low, but if getting weird errors with 1 or more channels, increase this (try 8)
 const int MIN_PERIOD = 200; // experiment with this - LED will cut out at high freqs, reduce this until stops
 const int MAX_PERIOD = 30000; // 34000 works out at around 4.8 secs
-const int HOLD_TIME = 500; // ms button needs to be held to scroll to next waveform
-const int MAX_HOLD_TIME = 1500; // ms, beyond which doesn't forward waveform, as you're editing it.
+const int HOLD_TIME = 400; // ms button needs to be held to scroll to next waveform
+const int MAX_HOLD_TIME = 1200; // ms, beyond which doesn't forward waveform, as you're editing it.
 const int MAX_WAVEFORMS = 8; // beyond this, overflows back to 0
 const int MAX_ATTACK = 2000; // ms
 const int MAX_RELEASE = MAX_ATTACK;
@@ -139,7 +139,7 @@ void setup() {
   Serial.begin(9600);
 
   SPI.begin();
-  Timer1.initialize(150); // updates every 100 usecs - reduce to get higher Hz
+  Timer1.initialize(300); // updates every 100 usecs - reduce to get higher Hz
   Timer1.attachInterrupt(updateClock); //
 
   pinMode(greenPin[0], OUTPUT);
@@ -288,7 +288,7 @@ void checkButtons() {
     } else if ((newPress) && (millis() >= buttonStartTime + HOLD_TIME) && (millis() <= buttonStartTime + MAX_HOLD_TIME) ) {
       waveform[buttonPressed - 1] ++;
       if (waveform[buttonPressed - 1] >= MAX_WAVEFORMS) {
-        waveform[buttonPressed - 1] = 0;
+        waveform[buttonPressed - 1] -= MAX_WAVEFORMS;
       }
       newPress = false;
     }
