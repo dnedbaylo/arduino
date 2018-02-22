@@ -11,10 +11,15 @@
    21 - sorted out buttons
    24 - more buttons, now short press scrolls between waveforms
    27 - buttons work, EG works. 27 is first normal functionality, working version.
+     start to optimise. should be able to use i as proxy for loop speed.
+   28 - at present crashing ? due to port manipulation. back to 27 & import bits of 28 until breaks. sadly.
+   29 - LEDs work again, not got to ports yet
 
   to do:
   learn mode: time between incoming gate clocks becomes next cycle of LFO - really interesting when driven by random source
   alternative is retrigger, which starts new LFO each gate in - implemented currently
+
+  store last values in EEPROM ? including pot values?
 
   next hardware revision:
    change to 5v rail to rail. less noise on 12v / analog rails. who cares about 0-8v CV? runnable just by USB.
@@ -33,14 +38,18 @@
 
 //editable
 const int POT_HYSTERESIS = 10; // keep low, but if getting weird errors with 1 or more channels, increase this (try 8)
-const int MIN_PERIOD = 200; // experiment with this - LED will cut out at high freqs, reduce this until stops
-const int MAX_PERIOD = 30000; // 34000 works out at around 4.8 secs
+const int MIN_PERIOD = 200; // experiment with this - LED will cut out at high freqs, monitor then reduce this until stops
+const int MAX_PERIOD = 30000; // 34000 works out at around 4.8 secs at TIMECALL of 300.
 const int HOLD_TIME = 400; // ms button needs to be held to scroll to next waveform
 const int MAX_HOLD_TIME = 1200; // ms, beyond which doesn't forward waveform, as you're editing it.
 const int MAX_WAVEFORMS = 8; // beyond this, overflows back to 0
 const int MAX_ATTACK = 2000; // ms
 const int MAX_RELEASE = MAX_ATTACK;
 const int MIN_AR = 10; // minimum attack & release to prevent glitches
+const int TIMECALL = 300; // how often i updates ie max freq, crashes if too low. lengthen period to compensate. 10 for unoptimised v27 code
+
+const boolean DEBUG = true;
+long testTime;
 
 
 // don't change these
@@ -89,6 +98,12 @@ const int LOW2 = 103;
 const int LOW3 = 180;
 const int LOW4 = 600;
 
+// int LOW1 = 100; // anything above this counts
+// button 1 gives 247
+//const int LOW2 = 230; // 212
+//const int LOW3 = 300; // 349
+//const int LOW4 = 600; // 706
+
 //elapsedMillis timeElapsed;
 
 // pins
@@ -102,23 +117,20 @@ const byte DAC1_CS = 8;
 
 // central vars
 volatile int i = 0; // clock, updates on timer
-int editCh = 0; // current channel (1-4) edited, 0 if edit mode off
+// int editCh = 0; // current channel (1-4) edited, 0 if edit mode off
 
+// held as bits
+byte gateRedLED_on = 0; // holds LED status on bits 0-3, turned on by HOLD in bits 4-7
+byte buttonRedLED_on = 0; // if on by button pressed - anded for final write so gate doesn't turn off when button pressed
 
 // buttons
 int buttonPinValue;
 byte buttonPressed = 0;
-// byte quicklyPressed = 0; // holds channel for button press less than HOLD_TIME
-// byte longPress = 0; // holds channel for press more than HOLD_TIME
-boolean newPress = false; // true at start of button
-// boolean newButtonHeld = false; // not used?
+boolean newPress = false; // true from start of button until button processed, or turned off
 long buttonStartTime;
 
 // channel vars
-byte redLED_on = 0; // holds LED status on bits 0-3, turned on by HOLD in bits 4-7
 volatile int potValue[] = {128, 128, 128, 128}; // up to 1024, top of analogRead range
-// boolean potMoved[] = {0, 0, 0, 0}; // moved flag so can latch pots
-
 volatile int value[4]; // = {1000, 2512, 2512, 2512}; // output value (12 bit 0-4096) use volatile if timer may change value
 
 int tweak0[] = {512, 512, 512, 512}; // fine pitch should be percentage of period ie 5% or 10% either way
@@ -139,7 +151,7 @@ void setup() {
   Serial.begin(9600);
 
   SPI.begin();
-  Timer1.initialize(300); // updates every 100 usecs - reduce to get higher Hz
+  Timer1.initialize(TIMECALL); // updates every x usecs - reduce to get higher Hz
   Timer1.attachInterrupt(updateClock); //
 
   pinMode(greenPin[0], OUTPUT);
@@ -151,6 +163,11 @@ void setup() {
   pinMode(redPin[2], OUTPUT);
   pinMode(redPin[3], OUTPUT);
 
+  //  DDRB = B00101111; // 0 is in, 1 is out
+  //  DDRC = B00000100;
+  //  DDRD = B01111111;
+
+
   pinMode(DAC0_CS, OUTPUT);
   pinMode(DAC1_CS, OUTPUT);
 
@@ -159,21 +176,27 @@ void setup() {
   pinMode(gateIn[2], INPUT);
 
   for (int i = 0; i <= 3; i ++) {
-    digitalWrite(redPin[i], bitRead(redLED_on, i));
+    digitalWrite(redPin[i], 0);
   }
 
   digitalWrite(DAC0_CS, HIGH);
   digitalWrite(DAC1_CS, HIGH);
 
   // for testing
-  waveform[0] = EG;
-  waveform[1] = EG;
-  waveform[2] = EG;
-  waveform[3] = EG;
+  waveform[0] = SINE;
+  waveform[1] = SINE;
+  waveform[2] = SINE;
+  waveform[3] = SINE;
+
+  testTime = micros();
 
 }
 
 void loop() {
+  int lag = micros() - testTime;
+  Serial.println(lag);
+  testTime = micros();
+  // lag 950us before any port manipulation
 
   // update timer
   if (i) { // if timer has updated
@@ -187,10 +210,13 @@ void loop() {
     place[3] += incr;
   }
 
+  //  Serial.println(i);
+
   // read interface
+  // TO DO change this so does one each time around, or occasionally
   readPots();
   checkGates();
-  updateLEDs();   // write to LEDs
+  updateLEDs();   // write to green LEDs (reds done by direct port manipulation
   checkButtons();
 
   // outputs
@@ -199,6 +225,10 @@ void loop() {
   setOutput(0, CH_B, 0, value[1]);
   setOutput(1, CH_A, 0, value[2]);
   setOutput(1, CH_B, 0, value[3]);
+
+  //  Serial.print(buttonPressed);
+  //  Serial.print("  button, LED:  ");
+  //  Serial.println(buttonRedLED_on);
 
   // testing
   //  Serial.println(value[2]);
@@ -232,28 +262,60 @@ void updateClock() { // called by interrupt, so timing moves on whatever else is
 }
 
 void checkGates() {
-  for (int i = 0; i < 3; i ++) {
+  for (byte i = 0; i < 3; i ++) {
     gate[i] = !(digitalRead(gateIn[i])); // (inverts gate in as hardware does, so) gate is true when signal received
     if (gate[i] == HIGH) {
-      bitSet(redLED_on, i); // turns on LED
+      bitSet(gateRedLED_on, i);
+      // turnRedOn(i);
+
+      //     bitSet(redLED_on, i); // turns on LED
       if (oldGate[i] == false) { // from now, gate is 1 when signal present at jack
         trigger[i] = true; // reset after processing
         oldGate[i] = true; // don't trigger again
         if (trigger[2]) {
           trigger[3] = true; // doesn't have own trigger yet // change if go to 4 ins
-          bitSet(redLED_on, 3); // turns on LED3 as well
+          bitSet(gateRedLED_on, 3);
+          //   turnRedOn(3);
+          bitSet(gateRedLED_on, 3); // turns on LED3 as well
         }
       }
     } else if (gate[i] == LOW) {
       oldGate[i] = false; // now you can
-      bitClear(redLED_on, i); // turns off LED
+      bitClear(gateRedLED_on, i); // turns off LED
       if (i == 2) {
-        bitClear(redLED_on, 3); // turns off 3rd LED also
+        bitClear(gateRedLED_on, 3); // turns off 3rd LED also
       }
     }
   }
 
 }
+
+/*
+  void turnRedOn(byte i) {
+  if (i == 0) {
+    PORTD = PORTD | 0x04; // turn on PD2
+  } else if (i == 1) {
+    PORTD = PORTD | 0x10; // turn on PD4
+  } else if (i == 2) {
+    PORTD = PORTD | 0x80; // turn on PD7
+  } else if (i == 3) {
+    PORTC = PORTC | 0x04; // turn on PC2
+  }
+  }
+
+
+  void turnRedOff(byte i) {
+  if (i == 0) {
+    PORTD = PORTD & 0xFB; // turn on PD2
+  } else if (i == 1) {
+    PORTD = PORTD | 0xEF; // turn on PD4
+  } else if (i == 2) {
+    PORTD = PORTD | 0x7F; // turn on PD7
+  } else if (i == 3) {
+    PORTC = PORTC | 0xFB; // turn on PC2
+  }
+  }
+*/
 
 void checkButtons() {
   // buttonPressed holds current button, 0 if nothing
@@ -263,37 +325,53 @@ void checkButtons() {
   // processes waveform change after long hold (length between HOLD_TIME and MAX_HOLD_TIME)
 
   int temp = analogRead(buttonPin);
+  //  Serial.println(temp);
   if (temp > LOW1) { // something is pressed
+    //   Serial.println("something pressed");
+
     if (buttonPressed == 0) {
       newPress = true;
       buttonStartTime = millis();
+      Serial.println(buttonStartTime);
     }
     if (temp < LOW2) { // which is it?
-      buttonPressed = 3;
-    } else if ((temp < LOW3) && (temp > LOW2)) {
-      buttonPressed = 4;
+      buttonPressed = 3; // 212
+    } else if ((temp <= LOW3) && (temp > LOW2)) {
+      buttonPressed = 4; // 247
     } else if ((temp < LOW4) && (temp > LOW3)) {
-      buttonPressed = 2;
+      buttonPressed = 2; // 349
     } else if (temp > LOW4) {
-      buttonPressed = 1;
+      buttonPressed = 1; // 706
     }
     if ((newPress) && (millis() > buttonStartTime + HOLD_TIME)) { // still pressed
-      bitSet(redLED_on, buttonPressed - 1); // turn on LED after HOLD_TIME
+      bitSet(buttonRedLED_on, buttonPressed - 1); // turn on LED after HOLD_TIME
     }
-  } else if (temp < LOW1) { // button released, check time
-    bitClear(redLED_on, buttonPressed - 1); // turn off LED
-    if ((newPress) && (millis() < buttonStartTime + HOLD_TIME)) {
+  } else if (temp <= LOW1) { // button released, check time
+    bitClear(buttonRedLED_on, buttonPressed - 1); // turn off LED either way
+    if ((newPress) && (millis() < buttonStartTime + HOLD_TIME)) { // just released, quick press -> trigger
       trigger[buttonPressed - 1] = true;
       newPress = false;
-    } else if ((newPress) && (millis() >= buttonStartTime + HOLD_TIME) && (millis() <= buttonStartTime + MAX_HOLD_TIME) ) {
+      Serial.print("quickly released: ");
+      Serial.println(buttonRedLED_on);
+    } else if ((newPress) && (millis() >= buttonStartTime + HOLD_TIME) && (millis() <= buttonStartTime + MAX_HOLD_TIME) ) { // released, within hold time
+      // scroll to next waveform
       waveform[buttonPressed - 1] ++;
       if (waveform[buttonPressed - 1] >= MAX_WAVEFORMS) {
         waveform[buttonPressed - 1] -= MAX_WAVEFORMS;
       }
+      if (DEBUG) {
+        Serial.print("held: ");
+        Serial.println(buttonPressed);
+        Serial.print("ch: ");
+        Serial.print(buttonPressed - 1);
+        Serial.print(", waveform: ");
+        Serial.println(waveform[buttonPressed - 1]);
+      }
       newPress = false;
     }
     buttonPressed = 0;
-  }
+    newPress = false;
+  } // buttons off
 }
 
 
@@ -410,8 +488,15 @@ void updateOutputs() {
 
 void updateLEDs() {
   for (int i = 0; i <= 3; i ++) {
-    digitalWrite(redPin[i], bitRead(redLED_on, i));
+    if ((bitRead(buttonRedLED_on, i)) || (bitRead(gateRedLED_on, i))) { // either on
+      digitalWrite(redPin[i], HIGH);
+    } else if ((bitRead(buttonRedLED_on, i) == 0) && (bitRead(gateRedLED_on, i) == 0)) { // both off
+      digitalWrite(redPin[i], LOW);
+    }
   }
+  //  for (int i = 0; i <= 3; i ++) {
+  //    digitalWrite(redPin[i], bitRead(buttonRedLED_on, i)); // change this as above to OR
+  //  }
   analogWrite(greenPin[0], value[0] / 16 ); // fo from 12 to 8 bit resolution for PWM to LEDs
   analogWrite(greenPin[1], value[1] / 16 );
   analogWrite(greenPin[2], value[2] / 16 );
