@@ -13,13 +13,13 @@
    27 - buttons work, EG works. 27 is first normal functionality, working version.
      start to optimise. should be able to use i as proxy for loop speed.
    28 - at present crashing ? due to port manipulation. back to 27 & import bits of 28 until breaks. sadly.
-   29 - LEDs work again, not got to ports yet
+   30 - port manipulation, brings loop time from 900 to 600us
 
   to do:
   learn mode: time between incoming gate clocks becomes next cycle of LFO - really interesting when driven by random source
   alternative is retrigger, which starts new LFO each gate in - implemented currently
 
-  store last values in EEPROM ? including pot values?
+  store last values in EEPROM ? including pot values? but not maximum amplitude - only changed for that time. 
 
   next hardware revision:
    change to 5v rail to rail. less noise on 12v / analog rails. who cares about 0-8v CV? runnable just by USB.
@@ -46,7 +46,7 @@ const int MAX_WAVEFORMS = 8; // beyond this, overflows back to 0
 const int MAX_ATTACK = 2000; // ms
 const int MAX_RELEASE = MAX_ATTACK;
 const int MIN_AR = 10; // minimum attack & release to prevent glitches
-const int TIMECALL = 300; // how often i updates ie max freq, crashes if too low. lengthen period to compensate. 10 for unoptimised v27 code
+const int TIMECALL = 200; // how often i updates ie max freq, crashes if too low. lengthen period to compensate. 10 for unoptimised v27 code
 
 const boolean DEBUG = true;
 long testTime;
@@ -66,9 +66,9 @@ const int SHUTDOWN = 1;
 const int EG = 0;
 const int SINE = 1;
 const int TRI = 2;
-const int PULSE = 3;
-const int RAMP_UP = 4;
-const int RAMP_DOWN = 5;
+const int RAMP_UP = 3;
+const int RAMP_DOWN = 4;
+const int PULSE = 5;
 const int RANDOM = 6;
 const int POT = 7;
 
@@ -112,12 +112,13 @@ const int redPin[] = {2, 4, 7, A2}; // check this // wired reversed in prototype
 const int gateIn[] = {12, A1, A0}; // change this from prototype?
 const int potPin[] = {A4, A5, A6, A7};
 const int buttonPin = A3; // 3 buttons via different resistors, into 1 pin
-const byte DAC0_CS = 10;
-const byte DAC1_CS = 8;
+
+const byte DAC0_CS = 10; // not used now, direct port manipulation, change function instead
+const byte DAC1_CS = 8; // not used now, direct port manipulation, change function instead
 
 // central vars
 volatile int i = 0; // clock, updates on timer
-// int editCh = 0; // current channel (1-4) edited, 0 if edit mode off
+byte takeTurns = 0; // reads each pot in order
 
 // held as bits
 byte gateRedLED_on = 0; // holds LED status on bits 0-3, turned on by HOLD in bits 4-7
@@ -135,7 +136,8 @@ volatile int value[4]; // = {1000, 2512, 2512, 2512}; // output value (12 bit 0-
 
 int tweak0[] = {512, 512, 512, 512}; // fine pitch should be percentage of period ie 5% or 10% either way
 int tweak1[] = {0, 0, 0, 0}; // 10 bit (0-1024) used for attack, or fine tuning LFO, portamento for noise, duty cycle for pulse,
-int tweak2[] = {100, 100, 100, 100}; // 10 bit (0-1024), release, or max amplitude for LFOs, (or randomness)
+int tweak2[] = {1024, 1024, 1024, 1024}; // 10 bit (0-1024), release, or max amplitude for LFOs, (or randomness)
+int maxAmp[] = {DAC_MAX, DAC_MAX, DAC_MAX, DAC_MAX};
 int waveform[4]; // 4 channels // doh! declaring it to [3] (ie 0-2) gave errors, as no waveform[3]
 int phase[] = {512, 512, 512, 512};
 volatile int place[] = {0, 0, 0, 0}; // place along cycle
@@ -147,33 +149,36 @@ boolean oldGate[] = {false, false, false};
 boolean trigger[] = {false, false, false, false}; // 4 channels, 3rd duplicated into 4th
 
 
+// ********************  setup ********************************
 void setup() {
   Serial.begin(9600);
 
   SPI.begin();
   Timer1.initialize(TIMECALL); // updates every x usecs - reduce to get higher Hz
   Timer1.attachInterrupt(updateClock); //
+  /*
+    pinMode(greenPin[0], OUTPUT);
+    pinMode(greenPin[1], OUTPUT);
+    pinMode(greenPin[2], OUTPUT);
+    pinMode(greenPin[3], OUTPUT);
+    pinMode(redPin[0], OUTPUT);
+    pinMode(redPin[1], OUTPUT);
+    pinMode(redPin[2], OUTPUT);
+    pinMode(redPin[3], OUTPUT);
 
-  pinMode(greenPin[0], OUTPUT);
-  pinMode(greenPin[1], OUTPUT);
-  pinMode(greenPin[2], OUTPUT);
-  pinMode(greenPin[3], OUTPUT);
-  pinMode(redPin[0], OUTPUT);
-  pinMode(redPin[1], OUTPUT);
+    pinMode(DAC0_CS, OUTPUT);
+    pinMode(DAC1_CS, OUTPUT);
+
+    pinMode(gateIn[0], INPUT);
+    pinMode(gateIn[1], INPUT);
+    pinMode(gateIn[2], INPUT);
+  */
+
+  DDRB = B00101111; // 0 is input, 1 is out
+  DDRC = B00000100;
+  DDRD = B01111111;
   pinMode(redPin[2], OUTPUT);
-  pinMode(redPin[3], OUTPUT);
-
-  //  DDRB = B00101111; // 0 is in, 1 is out
-  //  DDRC = B00000100;
-  //  DDRD = B01111111;
-
-
-  pinMode(DAC0_CS, OUTPUT);
-  pinMode(DAC1_CS, OUTPUT);
-
-  pinMode(gateIn[0], INPUT);
-  pinMode(gateIn[1], INPUT);
-  pinMode(gateIn[2], INPUT);
+  pinMode(greenPin[2], OUTPUT); // this should be covered in above ports, but doesn't work without declaring
 
   for (int i = 0; i <= 3; i ++) {
     digitalWrite(redPin[i], 0);
@@ -192,11 +197,14 @@ void setup() {
 
 }
 
+// ********************  loop  start ********************************
 void loop() {
+
+  // test loop time
   int lag = micros() - testTime;
   Serial.println(lag);
   testTime = micros();
-  // lag 950us before any port manipulation
+  // 560 best yet
 
   // update timer
   if (i) { // if timer has updated
@@ -212,12 +220,19 @@ void loop() {
 
   //  Serial.println(i);
 
-  // read interface
-  // TO DO change this so does one each time around, or occasionally
-  readPots();
-  checkGates();
-  updateLEDs();   // write to green LEDs (reds done by direct port manipulation
+  // read interface one pot each time around
+  if (takeTurns <= 3) {
+    readPots(takeTurns);
+  }
+
+  takeTurns ++;
+  if (takeTurns >= 3) {
+    takeTurns = 0;
+  }
+
   checkButtons();
+  updateLEDs();
+  checkGates();
 
   // outputs
   updateOutputs(); // update values
@@ -234,26 +249,30 @@ void loop() {
   //  Serial.println(value[2]);
 }
 
-void readPots() { // read pots
-  // ? period needs to be exponential - little difference in slow half of pot travel
-  for (int pot = 0; pot < 4; pot ++) {
-    int temp = analogRead(potPin[pot]);
-    if (abs(temp - potValue[pot]) > POT_HYSTERESIS) { // only change if pot has moved a bit, removes jitter
-      potValue[pot] = temp;
-      if (buttonPressed == 0) { // button not held, so pot updates frequencies according to potValue
-        period[pot] = map(potValue[pot], 0, 1023, MAX_PERIOD, MIN_PERIOD);
-      } else if (buttonPressed > 0) { // button held, so editing that channel
-        if (pot == 0) { // FINE
-          tweak0[buttonPressed - 1] = potValue[pot]; // or use map(potValue[ch], 0, 1023, 0, MAX_TWEAK?)
-        } else if (pot == 1) { // Pot 2
-          tweak1[buttonPressed - 1] = potValue[pot];
-        } else if (pot == 2) { // Pot 2
-          tweak2[buttonPressed - 1] = potValue[pot];
-        } else if (pot == 3) { // Pot 2
-          waveform[buttonPressed - 1] = map(potValue[pot], 0, 1023, 0, MAX_WAVEFORMS);
+// ********************  loop  end ********************************
+
+void readPots(byte pot) { // read pot
+  int temp = analogRead(potPin[pot]);
+  if (abs(temp - potValue[pot]) > POT_HYSTERESIS) { // only change if pot has moved a bit, removes jitter
+    potValue[pot] = temp;
+    if (buttonPressed == 0) { // button not held, so pot updates frequencies according to potValue
+      period[pot] = map(potValue[pot], 0, 1023, MAX_PERIOD, MIN_PERIOD);
+    } else if (buttonPressed > 0) { // button held, so editing that channel
+      if (pot == 0) { // FINE
+        //        tweak0[buttonPressed - 1] = potValue[pot]; // or use map(potValue[ch], 0, 1023, 0, MAX_TWEAK?)
+        period[buttonPressed - 1] = map(potValue[pot], 0, 1023, MAX_PERIOD, MIN_PERIOD);
+      } else if (pot == 1) { // 2nd pot
+        tweak1[buttonPressed - 1] = potValue[pot];
+      } else if (pot == 2) { // 3rd pot, changes maximum value
+        //       tweak2[buttonPressed - 1] = potValue[pot];
+        if (waveform[buttonPressed - 1] != EG) {
+          maxAmp[buttonPressed - 1] = map(potValue[pot], 0, 1024, 0, DAC_MAX);
         }
+      } else if (pot == 3) { // Pot 2
+        waveform[buttonPressed - 1] = map(potValue[pot], 0, 1023, 0, MAX_WAVEFORMS);
       }
     }
+
   }
 }
 
@@ -263,19 +282,17 @@ void updateClock() { // called by interrupt, so timing moves on whatever else is
 
 void checkGates() {
   for (byte i = 0; i < 3; i ++) {
+
     gate[i] = !(digitalRead(gateIn[i])); // (inverts gate in as hardware does, so) gate is true when signal received
+
     if (gate[i] == HIGH) {
       bitSet(gateRedLED_on, i);
-      // turnRedOn(i);
 
-      //     bitSet(redLED_on, i); // turns on LED
       if (oldGate[i] == false) { // from now, gate is 1 when signal present at jack
         trigger[i] = true; // reset after processing
         oldGate[i] = true; // don't trigger again
         if (trigger[2]) {
           trigger[3] = true; // doesn't have own trigger yet // change if go to 4 ins
-          bitSet(gateRedLED_on, 3);
-          //   turnRedOn(3);
           bitSet(gateRedLED_on, 3); // turns on LED3 as well
         }
       }
@@ -290,33 +307,6 @@ void checkGates() {
 
 }
 
-/*
-  void turnRedOn(byte i) {
-  if (i == 0) {
-    PORTD = PORTD | 0x04; // turn on PD2
-  } else if (i == 1) {
-    PORTD = PORTD | 0x10; // turn on PD4
-  } else if (i == 2) {
-    PORTD = PORTD | 0x80; // turn on PD7
-  } else if (i == 3) {
-    PORTC = PORTC | 0x04; // turn on PC2
-  }
-  }
-
-
-  void turnRedOff(byte i) {
-  if (i == 0) {
-    PORTD = PORTD & 0xFB; // turn on PD2
-  } else if (i == 1) {
-    PORTD = PORTD | 0xEF; // turn on PD4
-  } else if (i == 2) {
-    PORTD = PORTD | 0x7F; // turn on PD7
-  } else if (i == 3) {
-    PORTC = PORTC | 0xFB; // turn on PC2
-  }
-  }
-*/
-
 void checkButtons() {
   // buttonPressed holds current button, 0 if nothing
   // newPress true as soon as pressed, cancelled after processing in loop - triggers EG
@@ -325,15 +315,13 @@ void checkButtons() {
   // processes waveform change after long hold (length between HOLD_TIME and MAX_HOLD_TIME)
 
   int temp = analogRead(buttonPin);
-  //  Serial.println(temp);
-  if (temp > LOW1) { // something is pressed
-    //   Serial.println("something pressed");
 
-    if (buttonPressed == 0) {
+  if (temp > LOW1) { // something is pressed
+    if (buttonPressed == 0) { // ositive transition, button was 0
       newPress = true;
       buttonStartTime = millis();
-      Serial.println(buttonStartTime);
     }
+
     if (temp < LOW2) { // which is it?
       buttonPressed = 3; // 212
     } else if ((temp <= LOW3) && (temp > LOW2)) {
@@ -343,16 +331,23 @@ void checkButtons() {
     } else if (temp > LOW4) {
       buttonPressed = 1; // 706
     }
+
     if ((newPress) && (millis() > buttonStartTime + HOLD_TIME)) { // still pressed
       bitSet(buttonRedLED_on, buttonPressed - 1); // turn on LED after HOLD_TIME
     }
+
   } else if (temp <= LOW1) { // button released, check time
     bitClear(buttonRedLED_on, buttonPressed - 1); // turn off LED either way
+
     if ((newPress) && (millis() < buttonStartTime + HOLD_TIME)) { // just released, quick press -> trigger
       trigger[buttonPressed - 1] = true;
       newPress = false;
-      Serial.print("quickly released: ");
-      Serial.println(buttonRedLED_on);
+      if (DEBUG) {
+        Serial.print("quickly released: ");
+        Serial.println(buttonRedLED_on);
+      }
+      newPress = false;
+
     } else if ((newPress) && (millis() >= buttonStartTime + HOLD_TIME) && (millis() <= buttonStartTime + MAX_HOLD_TIME) ) { // released, within hold time
       // scroll to next waveform
       waveform[buttonPressed - 1] ++;
@@ -370,7 +365,7 @@ void checkButtons() {
       newPress = false;
     }
     buttonPressed = 0;
-    newPress = false;
+
   } // buttons off
 }
 
@@ -388,8 +383,8 @@ void updateOutputs() {
           place[ch] = 0;
           trigger[ch] = false; // trigger reset once processed
           // only recalculate period, attack & release times at start of envelope
-          attackTime[ch] = int(map(tweak0[ch], 0, 1024, MIN_AR, MAX_ATTACK));
-          releaseTime[ch] = int(map(tweak1[ch], 0, 1024, MIN_AR, MAX_RELEASE));
+          attackTime[ch] = int(map(tweak1[ch], 0, 1024, MIN_AR, MAX_ATTACK));
+          releaseTime[ch] = int(map(tweak2[ch], 0, 1024, MIN_AR, MAX_RELEASE));
           period[ch] = map(potValue[ch], 0, 1023, MIN_PERIOD, MAX_PERIOD); // pot goes other way round
         }
         if (place[ch] < attackTime[ch]) { // attack phase
@@ -410,9 +405,10 @@ void updateOutputs() {
           place[ch] = 0;
           trigger[ch] = false;
         }
-        phase[ch] = tweak2[ch];
-        value[ch] = int(sine(map(place[ch], 0, period[ch], 0, 1023), phase[ch])); // nearest cycle, means could get ragged sine wave at faster Hz then 256 clock periodicity
-        // ? tweak0 does fine tuning, tweak1 does shape (to triangle), tweak2 does noise
+        phase[ch] = tweak1[ch];
+//        maxAmp[ch] = map(tweak2[ch], 0, 1024, 0, DAC_MAX);
+        value[ch] = int(sine(map(place[ch], 0, period[ch], 0, maxAmp[ch] / 4), phase[ch])); // nearest cycle, means could get ragged sine wave at faster Hz then 256 clock periodicity
+        // ? tweak0 does fine tuning, tweak1 does shape (to triangle), tweak2 does max amplitute
         break;
 
       case TRI: // triangle
@@ -420,20 +416,40 @@ void updateOutputs() {
           place[ch] = 0; //
           trigger[ch] = false;
         }
+
         if (place[ch] < (period[ch] / 2) ) { // first half of waveform
-          value[ch] = int(map(place[ch], 0, period[ch] / 2, 0, DAC_MAX));
+          value[ch] = int(map(place[ch], 0, period[ch] / 2, 0, maxAmp[ch]));
         } else {
-          value[ch] = int(map(place[ch], period[ch] / 2, period[ch], DAC_MAX, 0));
+          value[ch] = int(map(place[ch], period[ch] / 2, period[ch], maxAmp[ch], 0));
         }
-        // ? tweak1 should do flattening of waveform
-        // tweak2 randomness
+        // ? tweak1 should do flattening of waveform, tweak2 max amplitute
+        break;
+
+      case RAMP_UP:
+        if ((place[ch] >= period[ch]) || (trigger[ch] == true)) {
+          place[ch] = 0; // minimum waveform cycle for sine, could potentially get extra octaves out of ramp or square wave
+          trigger[ch] = false;
+        }
+ //       maxAmp[ch] = map(tweak2[ch], 0, 1024, 0, DAC_MAX);
+        value[ch] = int(map(place[ch], 0, period[ch], 0, maxAmp[ch]));
+        break;
+
+      case RAMP_DOWN:
+        if ((place[ch] >= period[ch]) || (trigger[ch] == true)) {
+          place[ch] = 0; // minimum waveform cycle for sine, could potentially get extra octaves out of ramp or square wave
+          trigger[ch] = false;
+        }
+ //       maxAmp[ch] = map(tweak2[ch], 0, 1024, 0, DAC_MAX);
+        value[ch] = int(map(place[ch], 0, period[ch], maxAmp[ch], 0));
+        // ?? tweaks 1&2 do harmonics? that would be mental
         break;
 
       case PULSE: // srq wave
         if (place[ch] >= period[ch]) { // positive cycle triggered by gate in
           place[ch] = 0;
         }
-        duty[ch] = 10 + (period[ch] * tweak0[ch] / 1050); // fudge so always some pulse at min & max
+        duty[ch] = 10 + (period[ch] * tweak1[ch] / 1050); // fudge so always some pulse at min & max
+ //       maxAmp[ch] = map(tweak2[ch], 0, 1024, 0, DAC_MAX);
         // deal with triggers
         if (trigger[ch] == true) { // if new trigger - forwards to next transition
           if (place[ch] < duty[ch]) {
@@ -444,36 +460,19 @@ void updateOutputs() {
           trigger[ch] = false; // for now
         }
         if (place[ch] < duty[ch]) { // (period[0] / 2)) { // first half of waveform
-          value[ch] = DAC_MAX;
+          value[ch] = maxAmp[ch];
         } else {
           value[ch] = 0;
         }
         // ? write toggle instead, so can be triggered by pulse - alternates high & low
         break;
 
-      case RAMP_UP:
-        if ((place[ch] >= period[ch]) || (trigger[ch] == true)) {
-          place[ch] = 0; // minimum waveform cycle for sine, could potentially get extra octaves out of ramp or square wave
-          trigger[ch] = false;
-        }
-        //     value[ch] = place[ch];
-        value[ch] = int(map(place[ch], 0, period[ch], 0, DAC_MAX));
-        break;
-
-      case RAMP_DOWN:
-        if ((place[ch] >= period[ch]) || (trigger[ch] == true)) {
-          place[ch] = 0; // minimum waveform cycle for sine, could potentially get extra octaves out of ramp or square wave
-          trigger[ch] = false;
-        }
-        value[ch] = int(map(place[ch], 0, period[ch], DAC_MAX, 0));
-        // ?? tweaks 1&2 do harmonics? that would be mental
-        break;
-
       case RANDOM:
         if ((place[ch] >= period[ch]) || (trigger[ch] == true)) {
           place[ch] = 0; // minimum waveform cycle for sine, could potentially get extra octaves out of ramp or square wave
+ //         maxAmp[ch] = map(tweak2[ch], 0, 1024, 0, DAC_MAX);
           trigger[ch] = false;
-          value[ch] = random(DAC_MAX);
+          value[ch] = random(maxAmp[ch]);
         }
         break;
 
@@ -489,18 +488,38 @@ void updateOutputs() {
 void updateLEDs() {
   for (int i = 0; i <= 3; i ++) {
     if ((bitRead(buttonRedLED_on, i)) || (bitRead(gateRedLED_on, i))) { // either on
-      digitalWrite(redPin[i], HIGH);
+      turnRedOn(i); //       digitalWrite(redPin[i], HIGH);
     } else if ((bitRead(buttonRedLED_on, i) == 0) && (bitRead(gateRedLED_on, i) == 0)) { // both off
-      digitalWrite(redPin[i], LOW);
+      turnRedOff(i); //     digitalWrite(redPin[i], LOW);
     }
   }
-  //  for (int i = 0; i <= 3; i ++) {
-  //    digitalWrite(redPin[i], bitRead(buttonRedLED_on, i)); // change this as above to OR
-  //  }
   analogWrite(greenPin[0], value[0] / 16 ); // fo from 12 to 8 bit resolution for PWM to LEDs
   analogWrite(greenPin[1], value[1] / 16 );
   analogWrite(greenPin[2], value[2] / 16 );
   analogWrite(greenPin[3], value[3] / 16 );
+}
+
+void turnRedOn(byte i) { // tested & works
+  if (i == 0) {
+    PORTD = PORTD | 0x04; // turn on PD2
+  } else if (i == 1) {
+    PORTD = PORTD | 0x10; // turn on PD4
+  } else if (i == 2) {
+    PORTD = PORTD | 0x80; // turn on PD7
+  } else if (i == 3) {
+    PORTC = PORTC | 0x04; // turn on PC2
+  }
+}
+void turnRedOff(byte i) { // tested & works
+  if (i == 0) {
+    PORTD = PORTD & 0xFB; // turn off PD2
+  } else if (i == 1) {
+    PORTD = PORTD & 0xEF; // turn off PD4
+  } else if (i == 2) {
+    PORTD = PORTD & 0x7F; // turn off PD7
+  } else if (i == 3) {
+    PORTC = PORTC & 0xFB; // turn off PC2
+  }
 }
 
 int sine(int i, int phase) {
@@ -525,21 +544,15 @@ void setOutput(byte chip, byte channel, byte gain, unsigned int val) // bit 12 s
   byte highByte = ((val >> 8) & 0xff) | channel << 7 | gain << 5 | SHUTDOWN << 4; // 7 is bit 15, 5 bit 13. gain 0 is 2x
 
   if (chip == 0) {
-    //    PORTB &= 0xfb;
-    //    Serial.println("chip 0");
-    digitalWrite(DAC0_CS, LOW);
+    PORTB &= 0xfb;   // equiv to digitalWrite(DAC0_CS, LOW);
     SPI.transfer(highByte);
     SPI.transfer(lowByte);
-    digitalWrite(DAC0_CS, HIGH);
-    //   PORTB |= 0x4;
+    PORTB |= 0x4;   //  equiv to digitalWrite(DAC0_CS, HIGH);
   } else if (chip == 1) {
-    PORTB &= 0xfb;
-    //     Serial.println("chip 1");
-    digitalWrite(DAC1_CS, LOW);
+    PORTB &= 0xfe; // sets B0 low,  // equiv to digitalWrite(DAC1_CS, LOW);
     SPI.transfer(highByte);
     SPI.transfer(lowByte);
-    digitalWrite(DAC1_CS, HIGH);
-    //    PORTB |= 0x8;
+    PORTB |= 0x1; // sets B0 high, equiv to // digitalWrite(DAC1_CS, HIGH);
   }
 }
 
